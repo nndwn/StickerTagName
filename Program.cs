@@ -11,7 +11,7 @@ public class PersonEntry
 
 class Program
 {
-    private const int Dpi = 300;
+    private const int Dpi = 72;
     
     private static async Task Main(string[] args)
     {
@@ -20,135 +20,96 @@ class Program
         
         var border = args.Any(a=> a.Equals("-border",  StringComparison.CurrentCultureIgnoreCase));
         var names = await GetNames();
-      
         
-        var picturesPath = Environment.GetFolderPath(Environment.SpecialFolder.MyPictures);
+        var picturesPath = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);
         var resultFolder = Path.Combine(picturesPath, "Result");
-
-        var page = 0;
+        Directory.CreateDirectory(resultFolder);
+        
+        await using var stream = File.OpenWrite(Path.Combine(resultFolder, "labels.pdf"));
+        using var document = SKDocument.CreatePdf(stream);
+        
         foreach (var chunk  in names.Chunk(perPage))
         {
-            var createLabel = CreateA4WithLabel(chunk, border, rows, cols);
-            Directory.CreateDirectory(resultFolder);
-            var outputPath = Path.Combine(resultFolder,  $"output_page{page}.png");
-            await File.WriteAllBytesAsync(outputPath, createLabel);
-            page++;
+            using var pdfCanvas = document.BeginPage(MmToPx(210),  MmToPx(297));
+            pdfCanvas.Clear(SKColors.White);
+            DrawLabel(pdfCanvas, chunk.ToArray(), border,cols , rows);
+            document.EndPage();
         }
         
+        document.Close();   
     }
     
     
     private static int MmToPx(double mm) => (int)( mm * Dpi / 25.4);
 
-    private static byte[] CreateA4WithLabel(string[] names, bool border, int rows, int cols)
-    {
-        var a4Width = MmToPx(210);
-        var a4Height = MmToPx(297);
-        var marginPx = MmToPx(3);
-        var labelBytes = CreateLabel(names, border, rows, cols);
-        using var labelImage = SKImage.FromEncodedData(labelBytes);
-
-        using var surfaceA4 = SKSurface.Create(new SKImageInfo(a4Width, a4Height));
-        var canvasA4 = surfaceA4.Canvas;
-        canvasA4.Clear(SKColors.White);
-
-        canvasA4.Save();
-        
-        float pivotX = marginPx;
-        float pivotY = marginPx;
-        
-        canvasA4.Translate(pivotX, pivotY);
-
-
-        canvasA4.RotateDegrees(90);
-
-
-        canvasA4.DrawImage(labelImage, 0, -labelImage.Height);
-
-        canvasA4.Restore();
-
-        using var imageA4 = surfaceA4.Snapshot();
-        using var data = imageA4.Encode(SKEncodedImageFormat.Png, 100);
-        return data.ToArray();
-    }
-
-    private static byte[] CreateLabel(string[] names, bool border , int rows, int cols )
+    private static void DrawLabel(SKCanvas canvas, string[] names, bool border, int cols, int rows)
     {
         var imgW = MmToPx(64);
         var imgH = MmToPx(32);
         var padX = MmToPx(3);
         var padY = MmToPx(1.5);
+        var margin = MmToPx(3);
 
-        
-        var canvasW = cols * imgW + (cols - 1) * padX;
-        var canvasH = rows * imgH + (rows - 1) * padY;
-
-        using var surface = SKSurface.Create(new SKImageInfo(canvasW, canvasH));
-        var canvas = surface.Canvas;
-        canvas.Clear(SKColors.White);
-        
         using var cookieFont = File.OpenRead("Fonts/Cookie-Regular.ttf");
-        
+        var typeface = SKTypeface.FromStream(cookieFont) ?? SKTypeface.Default;
+
         var font = new SKFont
         {
-            Typeface = SKTypeface.FromStream(cookieFont),
+            Typeface = typeface,
             Size = 16 * Dpi / 72f
         };
-
-        const SKTextAlign textAlign = SKTextAlign.Center;
+        
+        const SKTextAlign alignText = SKTextAlign.Center;
 
         var paint = new SKPaint
         {
             Color = SKColors.Black,
             IsAntialias = true,
-
         };
-        
+
         var borderPaint = new SKPaint
         {
             Color = SKColors.Black,
             Style = SKPaintStyle.Stroke,
             StrokeWidth = 0.25f,
-            IsAntialias = true
+            IsAntialias = true,
         };
         
+        canvas.Save();
+        canvas.Translate(margin, margin);
+
+
+
         var index = 0;
         for (var r = 0; r < rows; r++)
         {
             for (var c = 0; c < cols; c++)
             {
                 if (index >= names.Length) break;
-                var text = $"{names[index]}\ndan Keluarga\ndi tempat";
+                var text = $"{names[index]}\ndan Keluarga di tempat";
                 var x = c * (imgW + padX);
                 var y = r * (imgH + padY);
-
-                var rect = new SKRect(x, y, x + imgW, y + imgH);
+                
+                var rect = new SKRect(x, y,x+ imgW, y + imgH);
                 var centerX = rect.MidX;
-                var lineHeight = font.Size + 4;
+                var metrics = font.Metrics;
+                var lineHeight = metrics.Descent - metrics.Ascent + 4;
                 var lines = text.Split('\n');
                 var totalHeight = lines.Length * lineHeight;
-                var startY = rect.MidY - totalHeight / 2 + font.Size;
+                var starY = rect.MidY - totalHeight / 2 - metrics.Ascent;
 
-                foreach (var line in lines )
+                foreach (var line in lines)
                 {
-                    canvas.DrawText(
-                        text: line, 
-                        x: centerX, 
-                        y: startY,
-                        font: font, 
-                        paint:paint,
-                        textAlign: textAlign);
-                    startY += lineHeight;
+                    canvas.DrawText(line, centerX, starY, alignText, font, paint);
+                    starY += lineHeight;
                 }
-
-                if (border) canvas.DrawRect(rect, borderPaint);
+                if(border) canvas.DrawRect(rect, borderPaint);
                 index++;
+
             }
         }
-
-        using var image = surface.Snapshot();
-        using var data = image.Encode(SKEncodedImageFormat.Png, 100);
-        return data.ToArray();
+        
+        canvas.Restore();
     }
 
     private static async Task<string[]> GetNames()
